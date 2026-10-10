@@ -165,7 +165,7 @@ sudo ufw status verbose
 `curl.exe -m 3 http://192.168.56.101:8080` завершился тайм-аутом.
 В `/var/log/ufw.log` зафиксированы `SRC=192.168.56.1`,
 `DST=192.168.56.101`, `PROTO=TCP`, `DPT=8080`.
-HTTP/HTTPS разрешены для будущей работы № 6; веб-сервер на этих портах пока не установлен.
+В ПР № 5 порты HTTP/HTTPS открыты заранее; текущее состояние Nginx описано в разделе 8.
 
 ## 7. Снимки состояния
 
@@ -276,12 +276,16 @@ Windows alias `devops` по-прежнему использует NAT `127.0.0.1
 # WSL, корень репозитория; сертификат передаётся только по проверенному SSH
 scp devops:/etc/ssl/certs/devops.crt ~/devops.crt
 git config core.fileMode false
+git config core.autocrlf input
 rsync -avz --delete --chmod=D755,F644 --dry-run site/ devops:/var/www/devops-site/
 scripts/deploy.sh --dry-run
 scripts/deploy.sh
 curl --cacert ~/devops.crt -I https://devops.local
 ```
 
+Для общего каталога Windows/WSL согласован `core.autocrlf input`;
+`.gitattributes` также принудительно хранится с LF. Это исключает ложное
+изменение самого файла атрибутов после checkout средствами Windows Git.
 На `/mnt/c` исходные файлы имеют права 777; параметр `--chmod` устанавливает
 755/644 на сервере. Сценарий работает из подкаталогов, отказывает при отсутствии
 index.html и при любых изменениях Git (рабочих, staged, untracked). Вызов rsync
