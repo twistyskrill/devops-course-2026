@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configuration audit for practical work 5. Exit 0: all checks pass; 1: failure.
+# Configuration audit for practical works 5 and 6. Exit 0: all checks pass; 1: failure.
 set -uo pipefail
 export LC_ALL=C
 PASS=0
@@ -57,5 +57,25 @@ check 'Default incoming policy is deny' deny "$incoming_policy"
 
 echo '[3] User accounts'
 awk -F: '$3>=1000 && $3<65534 {printf "    %s (uid=%s)\n",$1,$3}' /etc/passwd
+echo '[4] Web server'
+check 'Nginx service active' active "$(systemctl is-active nginx 2>/dev/null || true)"
+syntax=no
+sudo /usr/sbin/nginx -t >/dev/null 2>&1 && syntax=yes
+check 'Nginx configuration syntax valid' yes "$syntax"
+# Override only the test threshold to demonstrate expiration failure.
+CERT_MIN_SECONDS="${CERT_MIN_SECONDS:-2592000}"
+cert_ok=no
+if [[ "$CERT_MIN_SECONDS" =~ ^[0-9]+$ ]] && openssl x509 -in /etc/ssl/certs/devops.crt -noout -checkend "$CERT_MIN_SECONDS" >/dev/null 2>&1; then
+    cert_ok=yes
+fi
+check 'Certificate valid beyond expiration threshold' yes "$cert_ok"
+permissions_ok=no
+if world_writable=$(find /var/www/devops-site -perm -o+w -print 2>/dev/null) &&
+   key_permissions=$(sudo stat -c '%a' /etc/ssl/private/devops.key 2>/dev/null) &&
+   [[ -z "$world_writable" && "$key_permissions" == 600 ]]; then
+    permissions_ok=yes
+fi
+check 'No world-writable site paths; private key mode 600' yes "$permissions_ok"
+
 printf 'Passed: %s, failed: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
