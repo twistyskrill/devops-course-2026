@@ -1,6 +1,6 @@
 # Конфигурация виртуальной машины devops-vm
 
-Практическая работа № 5. Выполнил Кобзев Егор Максимович, ЭФБО-03-24.
+Практические работы № 5 и № 6. Выполнил Кобзев Егор Максимович, ЭФБО-03-24.
 Проверено 10 октября 2026 года на Windows и Ubuntu Server 24.04.5 LTS.
 
 ## 1. Параметры машины
@@ -53,7 +53,7 @@ Host-only адаптер Windows: `VirtualBox Host-Only Ethernet Adapter`,
 | Учётная запись | UID | Группы | Аутентификация |
 | --- | --- | --- | --- |
 | student | 1000 | student, adm, cdrom, sudo, dip, plugdev, lxd | Пароль в консоли; SSH после hardening запрещён AllowUsers |
-| devops | 1001 | devops, sudo, users | SSH только по Ed25519; пароль используется для sudo и консоли |
+| devops | 1001 | devops, sudo, users, docker (после ПР № 6) | SSH только по Ed25519; пароль используется для sudo и консоли |
 | root | 0 | root | Прямой SSH-вход запрещён |
 
 Приватный ключ находится **только на Windows-хосте**:
@@ -180,7 +180,159 @@ HTTP/HTTPS разрешены для будущей работы № 6; веб-�
 Текущее состояние после снимка 03 дополнительно содержит UFW, FQDN и аудит.
 Восстановление 03 возвращает состояние **до** настройки UFW и локального имени.
 
-## 8. Быстрое восстановление из 01-clean-install
+## 8. Веб-сервер
+
+Практическая работа № 6 выполнена 10 октября 2026 года. Основная VM действительно
+восстановлена из `01-clean-install` по инструкции раздела 9; SSH, UFW и FQDN
+повторно проверены до установки Nginx. Полное состояние ПР № 5 отдельно сохранено
+в снимке `03b-pr5-complete`. Аудит до установки Nginx использовался из коммита
+`35b05c4` и давал 6 OK; текущая версия проверяет также веб-сервер и даёт 10 OK.
+
+### Параметры и модель прав
+
+| Параметр | Фактическое значение |
+| --- | --- |
+| Пакет | `nginx`, версия 1.24.0, пакет Ubuntu `1.24.0-2ubuntu7.18` |
+| Служба | `nginx.service`, включена и активна |
+| Конфигурация | `/etc/nginx/sites-available/devops-site` |
+| Активная ссылка | `/etc/nginx/sites-enabled/devops-site` |
+| Конфигурация в Git | `config/nginx/devops-site.conf` |
+| Стандартный ресурс | ссылка `sites-enabled/default` удалена; `sites-available/default` сохранён |
+| Имя и порты | `devops.local`, TCP 80 и 443, IPv4 и IPv6 |
+| HTTP | 301 на `https://$host$request_uri` |
+| HTTPS | TLS 1.2 и 1.3; при проверке согласован TLS 1.3 |
+| Каталог | `/var/www/devops-site`, владелец `devops:devops`, 755 |
+| Файлы | `index.html`, `404.html`, владелец `devops:devops`, 644 |
+| Сертификат | `/etc/ssl/certs/devops.crt`, `root:root`, 644 |
+| Закрытый ключ | `/etc/ssl/private/devops.key`, `root:root`, 600 |
+| Срок сертификата | 365 дней, 10.10.2026 17:43:32 UTC — 10.10.2027 17:43:32 UTC |
+| SAN | `DNS:devops.local` |
+| Журналы | `/var/log/nginx/devops-site.access.log`, `devops-site.error.log` |
+
+Master работает от root, workers от www-data. Рабочий процесс читает страницы,
+но не может менять файлы или создавать их в каталоге. Ключ читает master.
+Закрытый ключ не копируется на хост и не добавляется в Git.
+HSTS не включён. Профили UFW Nginx не добавлялись: 80 и 443 уже разрешены.
+В блоке HTTP также задан журнал ресурса, поэтому распределение его кодов
+включает перенаправления 301, а не только ответы HTTPS.
+
+### Воспроизведение установки
+
+```bash
+# VM, после восстановления ПР № 5
+sudo apt update && sudo apt install -y nginx rsync
+sudo install -d -o devops -g devops -m 755 /var/www/devops-site
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key \
+  -out /etc/ssl/certs/devops.crt \
+  -subj "/CN=devops.local" \
+  -addext "subjectAltName=DNS:devops.local"
+sudo chown root:root /etc/ssl/private/devops.key /etc/ssl/certs/devops.crt
+sudo chmod 600 /etc/ssl/private/devops.key
+sudo chmod 644 /etc/ssl/certs/devops.crt
+```
+
+Передать конфигурацию из Git на VM через SSH и установить:
+
+```bash
+# Хост WSL, корень репозитория
+scp config/nginx/devops-site.conf devops:/tmp/devops-site.conf
+# VM
+sudo install -o root -g root -m 644 /tmp/devops-site.conf /etc/nginx/sites-available/devops-site
+sudo ln -sfn /etc/nginx/sites-available/devops-site /etc/nginx/sites-enabled/devops-site
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Конфигурация состоит из HTTP-блока с `return 301 https://$host$request_uri` и
+HTTPS-блока с `root /var/www/devops-site`, `index index.html`,
+`location / { try_files $uri $uri/ =404; }`, `error_page 404 /404.html`.
+Полный готовый файл находится в `config/nginx/devops-site.conf`.
+Перед любым применением изменений обязательно `nginx -t`; затем reload.
+
+### Хост Windows и доставка
+
+Установлена отдельная `Ubuntu-24.04` **WSL версии 1**; существующая
+`docker-desktop` версии 2 не изменялась. Запуск подготовленной среды:
+
+```powershell
+wsl -d Ubuntu-24.04 -u root
+```
+
+В WSL находятся rsync 3.2.7, Git, OpenSSH, curl 8.5.0, OpenSSL.
+SSH-ключ скопирован в `/root/.ssh/devops_vm` (600); каталог `.ssh` — 700.
+Конфигурация и known_hosts перенесены с Windows: отпечаток сервера уже проверен.
+В WSL alias `devops` направлен на Host-only `192.168.56.101:2222`;
+Windows alias `devops` по-прежнему использует NAT `127.0.0.1:2222`.
+Для повторного использования соединения в WSL заданы `ControlMaster auto`,
+`ControlPersist 600`, `ControlPath /root/.ssh/cm-%C`.
+Если DHCP-адрес изменился, обновить WSL SSH config и Windows hosts.
+`devops.local` в WSL разрешается в 192.168.56.101.
+
+```bash
+# WSL, корень репозитория; сертификат передаётся только по проверенному SSH
+scp devops:/etc/ssl/certs/devops.crt ~/devops.crt
+git config core.fileMode false
+rsync -avz --delete --chmod=D755,F644 --dry-run site/ devops:/var/www/devops-site/
+scripts/deploy.sh --dry-run
+scripts/deploy.sh
+curl --cacert ~/devops.crt -I https://devops.local
+```
+
+На `/mnt/c` исходные файлы имеют права 777; параметр `--chmod` устанавливает
+755/644 на сервере. Сценарий работает из подкаталогов, отказывает при отсутствии
+index.html и при любых изменениях Git (рабочих, staged, untracked). Вызов rsync
+открывает не более одного SSH-соединения, с BatchMode и ConnectTimeout=5.
+Проверка curl использует доверенный сертификат, `--fail` и тайм-ауты.
+Успех печатает короткий хеш и возвращает 0; отказ — 1; dry-run не делает HTTP-запрос.
+При UFW LIMIT остановить частые попытки и выдержать паузу; защиту не отключать.
+
+### Аудит, опыты и снимок
+
+Раздел `[4] Web server` в `scripts/audit.sh` проверяет active nginx, `nginx -t`,
+не менее 30 дней срока сертификата (2592000 секунд), отсутствие `o+w` в каталоге
+и права ключа 600. Для теста срока существует `CERT_MIN_SECONDS`:
+
+```bash
+scripts/audit.sh                             # 10 OK, код 0
+CERT_MIN_SECONDS=34560000 scripts/audit.sh    # 400 дней: 9 OK, 1 FAIL, код 1
+chmod 666 /var/www/devops-site/index.html
+scripts/audit.sh                             # 9 OK, 1 FAIL, код 1
+chmod 644 /var/www/devops-site/index.html
+scripts/audit.sh                             # снова 10 OK, код 0
+```
+
+Фактические опыты: файл 600 → HTTP 403 и `open() ... failed (13: Permission denied)`;
+каталог 755 → 200, 750 → 403, 744 → 403, 711 → 200.
+Без `--chmod` rsync перенёс 777, www-data успешно записал `<h1>defaced</h1>`.
+Штатный deploy восстановил HTML и 755/644; `find -perm -o+w` пуст;
+`sudo -u www-data touch .../index.html` получает Permission denied.
+
+Снимок `04-nginx-https` создан при выключенной VM после проверки HTTPS и SAN,
+до доставки итогового site/. Конфигурация, сертификат и снимки сохранены.
+После отката к ранним снимкам сохранить параметры консоли перед следующей перезагрузкой:
+
+```bash
+printf 'GRUB_CMDLINE_LINUX_DEFAULT="nomodeset"\nGRUB_GFXMODE=1280x800\nGRUB_GFXPAYLOAD_LINUX=keep\n' \
+  | sudo tee /etc/default/grub.d/99-devops-console.cfg
+sudo update-grub
+```
+
+### Подготовка ПР № 7
+
+Docker Engine 29.9.0 установлен из официального APT-репозитория
+`https://download.docker.com/linux/ubuntu`, suite noble, component stable,
+ключ `/etc/apt/keyrings/docker.asc`, источник `/etc/apt/sources.list.d/docker.sources`.
+Пакеты: docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin,
+docker-compose-plugin. Пакет docker.io не использовался.
+devops включён в docker; новый SSH-вход выполнил `docker run hello-world` без sudo.
+Группа docker даёт фактические возможности root через привилегированный daemon
+и монтирование файлов хоста; это расширение полномочий учётной записи.
+Порты контейнеров не публиковались. UFW остаётся активным; в будущих работах
+учитывать, что опубликованные Docker-порты могут обходить его обычные правила.
+
+
+## 9. Быстрое восстановление из 01-clean-install
 
 На Windows оставить текущий SSH-ключ. Пароль student взять из личных локальных
 данных доступа. После выключения VM, в PowerShell:
@@ -224,7 +376,9 @@ ssh devops.local
 ```
 
 Проверить Host-only IP и при необходимости поправить hosts Windows.
-На сервер передать `scripts/audit.sh`, затем:
+Для базовой проверки восстановления до Nginx использовать версию аудита из ПР № 5:
+`git show 35b05c4:scripts/audit.sh > /tmp/audit-pr5.sh`, передать её на VM как
+`audit.sh`. Текущий расширенный аудит ожидает установленный Nginx из раздела 8. Затем:
 
 ```bash
 bash scripts/audit.sh
@@ -237,7 +391,7 @@ echo $?
 Основная VM при этом не откатывалась. Для ручного выполнения учитывать ввод
 паролей и время первого запуска, оставаясь в пределах отведённых 10 минут.
 
-## 9. Проверка аудита и туннеля
+## 10. Проверка аудита и туннеля
 
 `scripts/audit.sh` читает действующую конфигурацию `sshd -T` и UFW.
 `LC_ALL=C` обеспечивает стабильный разбор вывода UFW.
