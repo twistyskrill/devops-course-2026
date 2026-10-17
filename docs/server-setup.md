@@ -1,7 +1,7 @@
 # Конфигурация виртуальной машины devops-vm
 
-Практические работы № 5 и № 6. Выполнил Кобзев Егор Максимович, ЭФБО-03-24.
-Проверено 10 октября 2026 года на Windows и Ubuntu Server 24.04.5 LTS.
+Практические работы № 5, № 6 и № 7. Выполнил Кобзев Егор Максимович, ЭФБО-03-24.
+Проверено 17 октября 2026 года на Windows и Ubuntu Server 24.04.5 LTS.
 
 ## 1. Параметры машины
 
@@ -178,6 +178,8 @@ sudo ufw status verbose
 | 03-ssh-hardened | SSH 2222, root и пароль запрещены, новые соединения проверены | 2a2f37a1-9c9c-41ef-a067-128c5095549f |
 | 03b-pr5-complete | Полное состояние ПР № 5 до отката для ПР № 6 | fa7aa678-270d-4cf9-8daf-ac5beed2db4c |
 | 04-nginx-https | Nginx, SAN, HTTPS и HTTP 301; временная главная страница | 259aad34-adbd-4e43-9c1f-83d08da3a510 |
+| 04b-pr6-complete | Полное состояние ПР № 6 перед контейнеризацией | db877df6-484c-4fc9-ae24-ddf2730bf186 |
+| 05-docker-compose | Приложение и БД, том, Nginx proxy, аудит 14 OK | ade7c50f-5939-4844-97ed-89df70454f3b |
 
 Текущее состояние ПР № 6 содержит UFW, FQDN, Nginx, итоговый сайт, расширенный аудит и Docker.
 Снимок 03b сохраняет полное состояние ПР № 5.
@@ -186,7 +188,7 @@ sudo ufw status verbose
 ## 8. Веб-сервер
 
 Практическая работа № 6 выполнена 10 октября 2026 года. Основная VM действительно
-восстановлена из `01-clean-install` по инструкции раздела 9; SSH, UFW и FQDN
+восстановлена из `01-clean-install` по инструкции раздела 10; SSH, UFW и FQDN
 повторно проверены до установки Nginx. Полное состояние ПР № 5 отдельно сохранено
 в снимке `03b-pr5-complete`. Аудит до установки Nginx использовался из коммита
 `35b05c4` и давал 6 OK; текущая версия проверяет также веб-сервер и даёт 10 OK.
@@ -339,7 +341,179 @@ devops включён в docker; новый SSH-вход выполнил `docke
 учитывать, что опубликованные Docker-порты могут обходить его обычные правила.
 
 
-## 9. Быстрое восстановление из 01-clean-install
+## 9. Контейнеризация
+
+Практическая работа № 7 выполнена 17 октября 2026 года. Код находится в `app/`,
+рабочий каталог на VM — `/home/devops/app`, проект Compose называется `app`.
+Состояние ПР № 6 сохранено отдельно как `04b-pr6-complete`; снимок
+`05-docker-compose` сохраняет приложение, СУБД и именованный том для следующих работ.
+
+### Docker Engine и привилегии
+
+Установлен официальный Docker Engine 29.9.0, Compose v5.6.0. Источник APT —
+`https://download.docker.com/linux/ubuntu`, suite `noble`, component `stable`,
+ключ `/etc/apt/keyrings/docker.asc`, файл `/etc/apt/sources.list.d/docker.sources`.
+Пакеты: `docker-ce`, `docker-ce-cli`, `containerd.io`, `docker-buildx-plugin`,
+`docker-compose-plugin`; пакет `docker.io` не используется. Восстановление на новой VM:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: noble
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo usermod -aG docker devops
+```
+
+Начать новую SSH-сессию и выполнить `id`, `docker version`, `docker compose version`,
+`docker run --rm hello-world` без sudo. У devops уже есть sudo. Группа docker даёт
+фактические права root через Docker daemon и монтирование файловой системы хоста;
+добавлять в неё обычные непривилегированные учётные записи нельзя.
+
+### Образ и доставка исходников
+
+`app/Dockerfile` использует `python:3.12-slim`, устанавливает зависимости до
+копирования кода, затем задаёт `USER app` и exec-форму CMD Gunicorn на порту 5000.
+Версии зависимостей: Flask 3.0.3, psycopg2-binary 2.9.9, Gunicorn 22.0.0.
+Файлы образа принадлежат root и имеют 644; процесс app читает их, но не меняет.
+При изменении только app.py установка зависимостей повторно берётся из кэша.
+Теги базовых образов фиксируют ветку версии, но не digest; для строгой побитовой
+воспроизводимости в дальнейшем следует закрепить digest и транзитивные зависимости.
+
+На хосте WSL, из корня Git-репозитория:
+
+```bash
+rsync -avz --delete --exclude=.env --chmod=D755,F644 --dry-run app/ devops:app/
+rsync -avz --delete --exclude=.env --chmod=D755,F644 app/ devops:app/
+```
+
+`--exclude=.env` также защищает серверный файл от удаления при `--delete`.
+`--chmod` нормализует права при доставке из Windows. Корневая `.gitignore`
+и `app/.dockerignore` исключают `.env`; содержимое секрета не копируется на хост
+и не включается в образ. Изолированный контейнер без СУБД отвечает `ok` на
+`/health`, а `/` возвращает 500: localhost внутри него не является адресом VM.
+
+### Серверный секрет и Compose
+
+Первоначально, только на VM от devops:
+
+```bash
+cd ~/app
+umask 077
+cp .env.example .env
+chmod 600 .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+docker compose up -d --build
+docker compose ps
+docker compose exec -T app id
+```
+
+Содержимое `.env` не выводить и не публиковать. При обычной повторной доставке
+существующий секрет сохраняется; генерация нового пароля при старом томе СУБД
+потребует согласованного изменения пароля роли PostgreSQL. `env_file` передаёт
+переменные в контейнеры; доступ к Docker API поэтому также означает доступ к ним.
+
+| Объект | Настройка |
+| --- | --- |
+| `app-app-1` | `devops-app:1.0`, Gunicorn, UID 999 `app` |
+| Порт приложения | `127.0.0.1:5000:5000`, доступен локальному Nginx |
+| `app-db-1` | `postgres:16-alpine`, порт 5432 на VM не опубликован |
+| Сеть | `app_backend`, пользовательская bridge; DNS-имя БД `db` |
+| Том | `app_db_data`, точка в контейнере `/var/lib/postgresql/data` |
+| Проверка БД | `pg_isready`, interval 5s, timeout 3s, retries 5 |
+| Запуск приложения | `depends_on: db: condition: service_healthy` |
+| Перезапуск | у обоих сервисов `restart: unless-stopped` |
+
+Полная конфигурация хранится в `app/docker-compose.yml`. В healthcheck запись
+`$${POSTGRES_USER}` оставляет раскрытие переменной оболочке контейнера.
+Проверка `service_healthy` ждёт первоначальной готовности БД; она не заменяет
+обработку последующих отказов приложением. `/health` проверяет веб-процесс,
+а запрос `/` дополнительно проверяет доступность записи и чтения в БД.
+
+```bash
+cd ~/app
+docker compose exec -T app getent hosts db
+sudo ss -tlnp | grep -E ':(5000|5432)\b'
+for i in 1 2 3; do curl -fsS http://127.0.0.1:5000/; done
+docker compose down
+docker volume ls
+docker compose up -d
+curl -fsS http://127.0.0.1:5000/
+```
+
+Счётчик сохраняется после `down` и увеличивается после `up`. В обязательном
+опыте только с новой учебной БД `down -v` удалил том, и следующий запрос после
+`up -d` дал 1. После опыта проект и новый том оставлены. В повседневной работе
+не применять `-v`, поскольку он уничтожает данные.
+
+### Nginx и проверка отказа
+
+В HTTPS-блок `/etc/nginx/sites-available/devops-site` добавлен только маршрут:
+
+```nginx
+location /app/ {
+    proxy_pass http://127.0.0.1:5000/;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Полный конфигурационный файл — `config/nginx/devops-site.conf`. Перед применением:
+
+```bash
+# Хост
+scp config/nginx/devops-site.conf devops:/tmp/devops-site.conf
+# VM
+sudo install -o root -g root -m 644 /tmp/devops-site.conf /etc/nginx/sites-available/devops-site
+sudo nginx -t && sudo systemctl reload nginx
+# Хост WSL
+curl --cacert ~/devops.crt https://devops.local/app/
+curl --cacert ~/devops.crt https://devops.local/app/health
+curl --cacert ~/devops.crt -I https://devops.local/
+```
+
+Завершающий `/` в proxy_pass преобразует `/app/health` в `/health`.
+Статическая главная страница и TLS из ПР № 6 сохранены. При остановке сервиса
+`docker compose stop app` запрос через Nginx получает 502, а error.log содержит
+`connect() failed (111: Connection refused) while connecting to upstream`.
+После `docker compose start app` проксирование восстанавливается.
+
+Опыт с временным `-p 5001:5000` показал ответ с хоста без правила UFW для 5001:
+Docker создаёт DNAT и собственные правила пересылки раньше обработки UFW.
+Тестовый контейнер `exposed` остановлен; в итоговой конфигурации 5000 привязан
+только к loopback, БД не публикуется. Не полагаться на UFW для защиты публикаций Docker.
+
+### Аудит и восстановление
+
+Раздел `[5] Containers` в `scripts/audit.sh` проверяет Docker active,
+`app-db-1` healthy, отсутствие слушателей 5000/5432 за пределами 127.0.0.1
+и права `/home/devops/app/.env` 600. Итог — 14 OK, 0 FAIL, код 0.
+Для отрицательного опыта публикация временно заменялась на `5000:5000`:
+появились `0.0.0.0:5000` и `[::]:5000`, проверка портов вернула FAIL и код 1.
+После восстановления безопасного Compose аудит снова возвращает 0.
+Проверка порта не заменяет `compose ps` и HTTP-запросы: отсутствие слушателя
+само по себе не доказывает работоспособность приложения.
+
+Для восстановления с `01-clean-install` выполнить раздел 10 (SSH, UFW, FQDN),
+раздел 8 (Nginx и TLS), затем этот раздел: установка Docker, доставка `app/`,
+создание серверного `.env`, `compose up -d --build`, добавление proxy location,
+аудит и запросы HTTPS. Для сохранения существующих данных предпочтителен снимок
+`05-docker-compose` либо резервная копия PostgreSQL; из Git восстанавливаются
+код и конфигурация, но не секрет и не содержимое тома.
+
+## 10. Быстрое восстановление из 01-clean-install
 
 На Windows оставить текущий SSH-ключ. Пароль student взять из личных локальных
 данных доступа. После выключения VM, в PowerShell:
@@ -399,7 +573,7 @@ echo $?
 откат и восстановление основной VM выполнены, что отражено в разделе 8. Для ручного выполнения учитывать ввод
 паролей и время первого запуска, оставаясь в пределах отведённых 10 минут.
 
-## 10. Проверка аудита и туннеля
+## 11. Проверка аудита и туннеля
 
 `scripts/audit.sh` читает действующую конфигурацию `sshd -T` и UFW.
 `LC_ALL=C` обеспечивает стабильный разбор вывода UFW.
