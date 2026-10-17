@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configuration audit for practical works 5 and 6. Exit 0: all checks pass; 1: failure.
+# Configuration audit for practical works 5 to 7. Exit 0: all checks pass; 1: failure.
 set -uo pipefail
 export LC_ALL=C
 PASS=0
@@ -76,6 +76,19 @@ if world_writable=$(find /var/www/devops-site -perm -o+w -print 2>/dev/null) &&
     permissions_ok=yes
 fi
 check 'No world-writable site paths; private key mode 600' yes "$permissions_ok"
+
+echo '[5] Containers'
+check 'Docker service active' active "$(systemctl is-active docker 2>/dev/null || true)"
+db_health=$(docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null || true)
+check 'PostgreSQL container healthy' healthy "$db_health"
+ports_private=no
+if listeners=$(sudo ss -H -ltn 2>/dev/null) &&
+   awk '$4 ~ /:(5000|5432)$/ && $4 !~ /^127[.]0[.]0[.]1:/ {bad=1} END {exit bad}' <<< "$listeners"; then
+    ports_private=yes
+fi
+check 'Ports 5000 and 5432 are not exposed beyond 127.0.0.1' yes "$ports_private"
+app_dir="${AUDIT_APP_DIR:-/home/devops/app}"
+check 'Server-only .env permissions equal 600' 600 "$(stat -c '%a' "$app_dir/.env" 2>/dev/null || true)"
 
 printf 'Passed: %s, failed: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
