@@ -35,6 +35,6 @@ if $dry_run; then
     printf 'Dry run complete for commit %s; remote contents unchanged\n' "$commit"
     exit 0
 fi
-curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+curl --fail --silent --show-error --connect-timeout 15 --max-time 30 \
      --cacert "$CA_CERT" "$SITE_URL" --output /dev/null
 printf 'Deployed commit %s; HTTPS certificate and HTTP status verified\n' "$commit"
