@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Configuration audit for practical works 5 to 7.
-# Use --pr5 to audit only the SSH and UFW configuration of practical work 5.
+# Default/--pr6 checks the configuration through practical work 6.
+# Use --pr5 for only SSH and UFW, or --all for the later container checks.
 # Exit 0: all checks pass; 1: failure; 2: invalid option.
 set -uo pipefail
 export LC_ALL=C
-case "${1:---all}" in
+case "${1:---pr6}" in
     --pr5) scope=pr5 ;;
+    --pr6) scope=pr6 ;;
     --all) scope=all ;;
-    *) printf 'Usage: %s [--pr5|--all]\n' "$0" >&2; exit 2 ;;
+    *) printf 'Usage: %s [--pr5|--pr6|--all]\n' "$0" >&2; exit 2 ;;
 esac
 if (( $# > 1 )); then
-    printf 'Usage: %s [--pr5|--all]\n' "$0" >&2
+    printf 'Usage: %s [--pr5|--pr6|--all]\n' "$0" >&2
     exit 2
 fi
 PASS=0
@@ -91,6 +93,10 @@ if world_writable=$(find /var/www/devops-site -perm -o+w -print 2>/dev/null) &&
     permissions_ok=yes
 fi
 check 'No world-writable site paths; private key mode 600' yes "$permissions_ok"
+if [[ "$scope" == pr6 ]]; then
+    printf 'Passed: %s, failed: %s\n' "$PASS" "$FAIL"
+    [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
+fi
 
 echo '[5] Containers'
 check 'Docker service active' active "$(systemctl is-active docker 2>/dev/null || true)"
