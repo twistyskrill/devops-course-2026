@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Configuration audit for practical works 5 to 7.
-# Default/--pr6 checks the configuration through practical work 6.
-# Use --pr5 for only SSH and UFW, or --all for the later container checks.
+# Default/--all checks the configuration through practical work 7.
+# Use --pr5 or --pr6 to limit the scope to earlier practical works.
 # Exit 0: all checks pass; 1: failure; 2: invalid option.
 set -uo pipefail
 export LC_ALL=C
-case "${1:---pr6}" in
+case "${1:---all}" in
     --pr5) scope=pr5 ;;
     --pr6) scope=pr6 ;;
     --all) scope=all ;;
