@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Configuration audit for practical works 5 to 7.
 # Default/--all checks the configuration through practical work 7.
+# --kr2 includes the optional control-work checks.
 # Use --pr5 or --pr6 to limit the scope to earlier practical works.
 # Exit 0: all checks pass; 1: failure; 2: invalid option.
 set -uo pipefail
@@ -9,10 +10,11 @@ case "${1:---all}" in
     --pr5) scope=pr5 ;;
     --pr6) scope=pr6 ;;
     --all) scope=all ;;
-    *) printf 'Usage: %s [--pr5|--pr6|--all]\n' "$0" >&2; exit 2 ;;
+    --kr2) scope=kr2 ;;
+    *) printf 'Usage: %s [--pr5|--pr6|--all|--kr2]\n' "$0" >&2; exit 2 ;;
 esac
 if (( $# > 1 )); then
-    printf 'Usage: %s [--pr5|--pr6|--all]\n' "$0" >&2
+    printf 'Usage: %s [--pr5|--pr6|--all|--kr2]\n' "$0" >&2
     exit 2
 fi
 PASS=0
@@ -110,6 +112,34 @@ fi
 check 'Ports 5000 and 5432 are not exposed beyond 127.0.0.1' yes "$ports_private"
 app_dir="${AUDIT_APP_DIR:-/home/devops/app}"
 check 'Server-only .env permissions equal 600' 600 "$(stat -c '%a' "$app_dir/.env" 2>/dev/null || true)"
+
+if [[ "$scope" == kr2 ]]; then
+    echo '[6] Control work No. 2'
+    kr2_dir="${AUDIT_KR2_DIR:-/home/devops/kr2}"
+    redis_id=$(docker compose --project-directory "$kr2_dir" ps -q redis 2>/dev/null || true)
+    redis_health=''
+    if [[ -n "$redis_id" ]]; then
+        redis_health=$(docker inspect -f '{{.State.Health.Status}}' "$redis_id" 2>/dev/null || true)
+    fi
+    check 'KR2 Redis container healthy' healthy "$redis_health"
+
+    app_port=$(docker compose --project-directory "$kr2_dir" port app 8004 2>/dev/null || true)
+    check 'KR2 app published only on loopback' '127.0.0.1:8004' "$app_port"
+    check 'KR2 .env permissions equal 600' 600 "$(stat -c '%a' "$kr2_dir/.env" 2>/dev/null || true)"
+
+    kr2_cert_ok=no
+    if openssl x509 -in /etc/ssl/certs/kr2.crt -noout -checkend 2592000 >/dev/null 2>&1; then
+        kr2_cert_ok=yes
+    fi
+    check 'KR2 certificate valid at least 30 days' yes "$kr2_cert_ok"
+
+    kr2_site_ok=no
+    if [[ -L /etc/nginx/sites-enabled/kr2 &&
+          "$(readlink -f /etc/nginx/sites-enabled/kr2)" == /etc/nginx/sites-available/kr2 ]]; then
+        kr2_site_ok=yes
+    fi
+    check 'KR2 Nginx site enabled' yes "$kr2_site_ok"
+fi
 
 printf 'Passed: %s, failed: %s\n' "$PASS" "$FAIL"
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
