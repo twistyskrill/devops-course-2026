@@ -1,0 +1,6 @@
+---
+app_image: "ghcr.io/twistyskrill/devops-ci-app"
+app_tag: "a576b748df7854c4f9c2486a4002d44b24c9abdc"
+app_container_name: "devops-ci-app"
+app_host_port: 5000
+app_internal_port: 5000

@@ -1,4 +1,6 @@
-# Настройка devops-vm на macOS — практические работы № 5–6
+# Настройка devops-vm на macOS — практические работы № 5–7 и № 11
+
+> Разделы 1–9 описывают состояние прежних практических работ. Для ПР № 11 VM восстановлена к снимку `01-clean-install` и затем конфигурируется Ansible. Актуальная конфигурация после ПР № 11 описана в разделе 10. Состояние до отката сохранено снимком `08-before-pr11`.
 
 Это новая виртуальная машина на Mac с Apple Silicon (M3). Прежняя работа на Windows, включая Nginx и Docker из практических работ № 6–7, сохранена в [архивном описании](server-setup-windows-archive.md). Команды и результаты из него **не относятся** к нынешней VM.
 
@@ -187,7 +189,28 @@ Nginx принимает HTTPS на `devops.local` и проксирует `/app
 
 Полный аудит: `bash ~/audit.sh` (или `--all`). Он проверяет службу Docker, здоровье `app-db-1`, отсутствие прослушивания 5000/5432 за пределами loopback и права `.env`. На рабочей конфигурации: 14 OK, 0 FAIL, код 0. При временной замене порта Compose на `5000:5000`: 13 OK, 1 FAIL, код 1; исходная привязка восстановлена. Режимы `--pr5` и `--pr6` оставлены для проверки прежних этапов.
 
-## 10. Восстановление после отката
+## 10. Ansible
+
+Управляющий узел — Mac (Apple Silicon); управляемый узел — Ubuntu Server 24.04 ARM64 в VirtualBox. Проект расположен в каталоге `ansible/`. Host-only адрес VM после отката — `192.168.56.2`; SSH слушает порт 22. Снимок `08-before-pr11` сохраняет состояние ПР № 5–7 и КР № 2 до отката.
+
+`inventory/bootstrap.ini` подключается от `student` с ключом Mac и используется только для первоначальной конфигурации. `inventory/prod.ini` подключается от `devops` с тем же ключом и применяет `NOPASSWD` sudo для неинтерактивных повторных запусков. Закрытый ключ хранится только на Mac и не входит в репозиторий. `ansible.cfg` выбирает prod inventory по умолчанию и содержит `force_handlers = True`.
+
+Роль `base` устанавливает пакеты и Docker Engine из официального репозитория Docker для архитектуры VM (`arm64`); `ssh` создаёт `devops`, устанавливает открытый ключ, проверяет sudoers и конфигурацию sshd, затем включает UFW с входящими портами 22 и 80; `nginx` создаёт reverse proxy; `app` загружает GHCR-образ по полному SHA и запускает контейнер `devops-ci-app`. Порт приложения `5000` публикуется только на `127.0.0.1`, а Nginx принимает внешние запросы на порту 80 и передаёт их контейнеру. Health endpoint: `/health`.
+
+Образ: `ghcr.io/twistyskrill/devops-ci-app:a576b748df7854c4f9c2486a4002d44b24c9abdc`; полный тег SHA задан в `ansible/group_vars/all.yml`. Он содержит платформы `linux/amd64` и `linux/arm64`, чтобы использовать один неизменяемый тег на Intel и Apple Silicon. CI собирает и проверяет обе платформы на соответствующих GitHub runner и публикует multi-platform index.
+
+Команды запуска на Mac из каталога `ansible/`:
+
+```bash
+ansible-galaxy collection install -r requirements.yml
+ansible-playbook -i inventory/bootstrap.ini site.yml --ask-become-pass
+ansible-playbook site.yml
+ansible-playbook verify.yml
+```
+
+После первого запуска нужно проверить новый вход `devops` по ключу, `sudo -n true`, ответ `curl http://192.168.56.2/health`, правила UFW и привязку Docker-порта. Повторный `site.yml` должен завершаться `changed=0, failed=0`; `verify.yml` проверяет SSH, контейнер и прямой health endpoint без изменений VM.
+
+## 11. Восстановление после отката
 
 Для продолжения работ № 7 восстановить снимок `05-docker-compose`: после запуска VM проверить `docker compose ps` в `/home/devops/app`, `bash ~/audit.sh` и HTTPS-запрос к `/app/health`. Внутри снимка находятся том БД и файл `.env` с правами `600`; не переносить `.env` в Git и не применять `docker compose down -v`, если нужны данные.
 
